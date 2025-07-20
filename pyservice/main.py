@@ -1,8 +1,8 @@
 
-# pyservice/main.py
-
 import os
-from dotenv import load_dotenv
+from pathlib import Path
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -10,49 +10,57 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 from sqlalchemy import Column, Integer, String, select
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base
-from contextlib import asynccontextmanager
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# ── 1. 加载 .env ─────────────────────────────────────
+from .db import engine, Base, get_db
 
-base_dir = os.path.dirname(__file__) + "/../"
-load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
+# ── 1. 配置 & 环境加载 ─────────────────────────────────────────
+
+# 根目录
+BASE_DIR = Path(__file__).parent.parent
 
 class Settings(BaseSettings):
     cors_origins: str = "*"
 
     class Config:
-        env_file = os.path.join(base_dir, ".env")
+        env_file = BASE_DIR / ".env"
         env_file_encoding = "utf-8"
 
 settings = Settings()
 origins = settings.cors_origins.split(",")
 
-# ── 2. 数据库配置 ─────────────────────────────────────
+# ── 2. Lifespan：启动时自动建表 ──────────────────────────────────
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("请设置 DATABASE_URL 环境变量")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    # 关闭时可加清理逻辑
 
-# 异步引擎
-engine = create_async_engine(DATABASE_URL, echo=True)
+app = FastAPI(lifespan=lifespan)
 
-# 异步 Session 工厂（命名参数以消除类型警告）
-AsyncSessionLocal = sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
+# ── 3. 中间件 & 静态文件 ────────────────────────────────────────
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# ORM 基类
-Base = declarative_base()
+# 静态文件挂载
+static_dir = BASE_DIR / "pyservice" / "static"
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        yield session
+# favicon
+@app.get("/favicon.ico")
+async def favicon():
+    return FileResponse(static_dir / "favicon.ico")
 
-# ── 3. 定义模型和 Pydantic Schema ───────────────────────
+# ── 4. 数据模型 & Pydantic Schema ─────────────────────────────────
 
 class Item(Base):
     __tablename__ = "items"
@@ -74,62 +82,25 @@ class AddRequest(BaseModel):
 class AddResponse(BaseModel):
     result: float
 
-# ── 4. Lifespan 处理启动时建表 ────────────────────────────
+# ── 5. 路由 ──────────────────────────────────────────────────────
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 启动：创建表
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
-    # 关闭：无操作
-
-app = FastAPI(lifespan=lifespan)
-
-# ── 5. 中间件 & 静态文件 ─────────────────────────────────
-
-# 静态文件
-static_path = os.path.join(os.path.dirname(__file__), "static")
-app.mount("/static", StaticFiles(directory=static_path), name="static")
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# favicon
-@app.get("/favicon.ico")
-async def favicon():
-    return FileResponse(os.path.join(static_path, "favicon.ico"))
-
-# 根路由
 @app.get("/")
 async def read_root():
     return {"message": "API is up and running"}
 
-# 加法接口
 @app.post("/add", response_model=AddResponse)
 @app.post("/add/", response_model=AddResponse)
-async def add_numbers(payload: AddRequest):
-    return {"result": payload.a + payload.b}
+async def add_numbers(req: AddRequest):
+    return {"result": req.a + req.b}
 
-# 创建 Item
 @app.post("/items/", response_model=ItemRead)
-async def create_item(
-    data: ItemCreate,
-    db: AsyncSession = Depends(get_db)
-):
+async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
     item = Item(name=data.name, price=data.price)
     db.add(item)
     await db.commit()
     await db.refresh(item)
     return item
 
-# 列出 Items
 @app.get("/items/", response_model=list[ItemRead])
 async def list_items(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Item))
