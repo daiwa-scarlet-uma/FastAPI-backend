@@ -1,0 +1,57 @@
+# =============================
+# Python / FastAPI 项目
+# =============================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments (Poetry in-project or venv)
+.venv/
+ENV/
+env/
+
+# Environment variables
+.env
+
+# =============================
+# Node.js / Next.js 项目
+# =============================
+# Node modules
+node_modules/
+
+# Next.js build outputs
+.next/
+out/
+
+# Yarn Plug’n’Play
+.pnp/
+/.pnp.js
+
+# Production build
+build/
+
+# =============================
+# IDE / Editor 文件
+# =============================
+# VSCode
+.vscode/
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+
+# macOS Finder
+.DS_Store
+
+# Windows thumbnail cache
+Thumbs.db
+
+# =============================
+# Logs and databases
+# =============================
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.sqlite3
