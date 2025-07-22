@@ -5,23 +5,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import engine, Base, get_db
-from .models import Item
+from .models import Operation
 
-# 项目根目录
 BASE_DIR = Path(__file__).parent.parent
 
-# 1. 加载环境配置
 class Settings(BaseSettings):
     cors_origins: str = "*"
-
     class Config:
         env_file = BASE_DIR / ".env"
         env_file_encoding = "utf-8"
@@ -29,7 +26,6 @@ class Settings(BaseSettings):
 settings = Settings()
 origins = settings.cors_origins.split(",")
 
-# 2. Lifespan：启动时建表
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
@@ -38,7 +34,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# 3. CORS & 静态文件
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -47,51 +43,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 静态 / favicon（如果需要）
 static_dir = BASE_DIR / "pyservice" / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
 @app.get("/favicon.ico")
 async def favicon():
     return FileResponse(static_dir / "favicon.ico")
 
-# 4. 根路由
+# 根路由
 @app.get("/")
 async def read_root():
     return {"message": "API is up and running"}
 
-# 5. 加法接口
+# 加法并存库
 class AddRequest(BaseModel):
-    a: float
-    b: float
+    a: int
+    b: int
 
 class AddResponse(BaseModel):
-    result: float
+    result: int
 
 @app.post("/add", response_model=AddResponse)
 @app.post("/add/", response_model=AddResponse)
-async def add_numbers(payload: AddRequest):
-    return {"result": payload.a + payload.b}
-
-# 6. Item CRUD 接口
-class ItemCreate(BaseModel):
-    name: str
-    price: int
-
-class ItemRead(ItemCreate):
-    id: int
-
-@app.post("/items/", response_model=ItemRead)
-async def create_item(
-    data: ItemCreate,
+async def add_numbers(
+    payload: AddRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    item = Item(name=data.name, price=data.price)
-    db.add(item)
+    res = payload.a + payload.b
+    op = Operation(a=payload.a, b=payload.b, result=res)
+    db.add(op)
     await db.commit()
-    await db.refresh(item)
-    return item
+    return {"result": res}
 
-@app.get("/items/", response_model=list[ItemRead])
-async def list_items(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Item))
+# 查看历史运算记录
+class OperationRead(BaseModel):
+    id: int
+    a: int
+    b: int
+    result: int
+
+@app.get("/operations/", response_model=list[OperationRead])
+async def list_operations(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Operation))
     return result.scalars().all()
